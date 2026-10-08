@@ -1,62 +1,162 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { formatServiceDate, loadReservations, Reservation, saveReservations } from "@/lib/reservations";
+import { Badge, Button, Card } from "@/components/ui";
+import { readLocal, writeLocal } from "@/lib/persist";
+
+type Reservation = Record<string, unknown>;
+
+const STORAGE_KEYS = [
+  "juniper-reservations",
+  "juniper-table-reservations",
+  "juniperReservations",
+  "juniper-table-bookings",
+  "reservations",
+  "bookings",
+];
+
+function getString(record: Reservation, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" || typeof value === "number") return String(value);
+  }
+  return "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getReservations(value: unknown): Reservation[] {
+  let rows: unknown[] = [];
+  if (Array.isArray(value)) {
+    rows = value;
+  } else if (isRecord(value) && Array.isArray(value.reservations)) {
+    rows = value.reservations;
+  }
+  return rows.filter((item): item is Reservation => isRecord(item));
+}
+
+function displayDate(value: string): string {
+  const normalized = value.slice(0, 10);
+  const parts = normalized.split("-").map(Number);
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return value;
+  return new Date(parts[0], parts[1] - 1, parts[2]).toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function isCanceled(reservation: Reservation): boolean {
+  const status = getString(reservation, ["status"]).toLowerCase();
+  return status === "cancelled" || status === "canceled";
+}
 
 export default function CancelPage() {
-  const [reservation, setReservation] = useState<Reservation | null>(null);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [storageKey, setStorageKey] = useState(STORAGE_KEYS[0]);
+  const [lookupCode, setLookupCode] = useState("");
   const [loaded, setLoaded] = useState(false);
-  const [message, setMessage] = useState("");
+  const [working, setWorking] = useState(false);
+  const [result, setResult] = useState("");
 
   useEffect(() => {
-    const token = new URLSearchParams(window.location.search).get("token");
-    const found = loadReservations().find((item) => item.token === token) ?? null;
-    setReservation(found);
+    const params = new URLSearchParams(window.location.search);
+    setLookupCode(params.get("token") || params.get("code") || params.get("cancellationToken") || params.get("id") || "");
+    let foundKey = STORAGE_KEYS[0];
+    let found: Reservation[] = [];
+    for (const key of STORAGE_KEYS) {
+      const rows = getReservations(readLocal<unknown>(key, []));
+      if (rows.length > 0) {
+        foundKey = key;
+        found = rows;
+        break;
+      }
+    }
+    setStorageKey(foundKey);
+    setReservations(found);
     setLoaded(true);
   }, []);
 
-  function confirmCancellation() {
-    if (!reservation || reservation.status !== "confirmed") return;
-    const latest = loadReservations();
-    const current = latest.find((item) => item.token === reservation.token);
-    if (!current || current.status !== "confirmed") {
-      setReservation(current ?? null);
-      setMessage("This reservation has already been updated.");
-      return;
+  const reservation = reservations.find((item) => {
+    if (!lookupCode) return false;
+    return ["cancellationToken", "cancelToken", "token", "id", "reservationId"].some((key) => getString(item, [key]) === lookupCode);
+  });
+
+  function cancelReservation() {
+    if (!reservation || !lookupCode || working || isCanceled(reservation)) return;
+    setWorking(true);
+    setResult("");
+    try {
+      const current = getReservations(readLocal<unknown>(storageKey, []));
+      const updated = current.map((item) => {
+        const matches = ["cancellationToken", "cancelToken", "token", "id", "reservationId"].some((key) => getString(item, [key]) === lookupCode);
+        return matches ? { ...item, status: "cancelled", canceledAt: new Date().toISOString() } : item;
+      });
+      if (!updated.some((item) => ["cancellationToken", "cancelToken", "token", "id", "reservationId"].some((key) => getString(item, [key]) === lookupCode))) {
+        setResult("We couldn't update this reservation. Please return to the cafe team for help.");
+        return;
+      }
+      writeLocal(storageKey, updated);
+      setReservations(updated);
+      setResult("Your reservation has been canceled.");
+    } catch {
+      setResult("We couldn't cancel your reservation right now. Please try again or contact the cafe.");
+    } finally {
+      setWorking(false);
     }
-    const updated = latest.map((item) => item.token === current.token ? { ...item, status: "cancelled" as const } : item);
-    saveReservations(updated);
-    setReservation(updated.find((item) => item.token === current.token) ?? null);
-    setMessage("Your reservation has been cancelled.");
   }
 
+  const guest = reservation ? getString(reservation, ["guestName", "name", "customerName"]) : "";
+  const date = reservation ? getString(reservation, ["date", "serviceDate", "reservationDate"]) : "";
+  const time = reservation ? getString(reservation, ["time", "serviceTime"]) : "";
+  const party = reservation ? getString(reservation, ["partySize", "guests", "size", "covers"]) : "";
+  const contact = reservation ? getString(reservation, ["email", "phone", "contact"]) : "";
+
   return (
-    <main className="min-h-screen bg-[#f7f2e8] px-5 py-8 text-[#26362f] sm:py-14">
+    <main className="min-h-screen bg-[#F7F2E8] px-4 py-8 text-[#26362F] sm:px-6 sm:py-14">
       <div className="mx-auto max-w-xl">
-        <Link href="/" className="font-serif text-2xl font-semibold tracking-tight">Juniper Table<span className="text-[#b85c38]">.</span></Link>
-        <section className="mt-8 rounded-[22px] border border-[#e4dccd] bg-[#fffdf8] p-6 shadow-lg shadow-[#574831]/[0.06] sm:mt-12 sm:p-9">
-          {!loaded ? <p className="text-sm text-[#68756c]">Looking up your reservation…</p> : !reservation ? <>
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#b85c38]">Reservation help</p>
-            <h1 className="mt-3 font-serif text-3xl">We couldn’t find that reservation.</h1>
-            <p className="mt-3 text-sm leading-6 text-[#59675e]">The cancellation link may be incomplete, or the reservation is not saved in this browser.</p>
-          </> : <>
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#b85c38]">Reservation cancellation</p>
-            <h1 className="mt-3 font-serif text-3xl">Review your reservation</h1>
-            <p className="mt-2 text-sm leading-6 text-[#59675e]">Please check the details below before confirming your cancellation.</p>
-            <dl className="mt-6 grid grid-cols-2 gap-x-4 gap-y-5 rounded-xl bg-[#f7f2e8] p-4 text-sm sm:p-5">
-              <div><dt className="text-xs text-[#69756d]">Guest</dt><dd className="mt-1 font-semibold">{reservation.guestName}</dd></div>
-              <div><dt className="text-xs text-[#69756d]">Party</dt><dd className="mt-1 font-semibold">{reservation.partySize} {reservation.partySize === 1 ? "guest" : "guests"}</dd></div>
-              <div><dt className="text-xs text-[#69756d]">Date</dt><dd className="mt-1 font-semibold">{formatServiceDate(reservation.date)}</dd></div>
-              <div><dt className="text-xs text-[#69756d]">Time</dt><dd className="mt-1 font-semibold">{reservation.time}</dd></div>
-              <div className="col-span-2"><dt className="text-xs text-[#69756d]">Contact</dt><dd className="mt-1 font-semibold">{reservation.email} · {reservation.phone}</dd></div>
+        <header className="mb-10 flex items-center justify-between gap-4">
+          <a href="/" className="text-sm font-semibold tracking-wide text-[#26362F] hover:text-[#B85C38]">Juniper Table</a>
+          <a href="/" className="text-sm text-[#52645A] underline underline-offset-4 hover:text-[#B85C38]">Back to booking</a>
+        </header>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#8A654F]">Reservation help</p>
+        <h1 className="font-serif text-4xl text-[#26362F] sm:text-5xl">Cancel a reservation</h1>
+        <p className="mt-3 text-sm leading-6 text-[#52645A]">Use the private cancellation link from your confirmation to review and cancel your booking.</p>
+
+        {!loaded ? (
+          <Card className="mt-8 border-[#E8DED0] bg-[#FFFDF8] text-sm text-[#66756C]">Looking up your reservation…</Card>
+        ) : reservation ? (
+          <Card className="mt-8 border-[#E8DED0] bg-[#FFFDF8] p-5 shadow-sm sm:p-7">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="font-serif text-2xl">Your reservation</h2>
+              <Badge tone={isCanceled(reservation) ? "bad" : "pass"}>{isCanceled(reservation) ? "Canceled" : "Confirmed"}</Badge>
+            </div>
+            <dl className="mt-5 divide-y divide-[#EEE5D9] text-sm">
+              {guest ? <div className="flex justify-between gap-4 py-3"><dt className="text-[#66756C]">Guest</dt><dd className="text-right font-medium">{guest}</dd></div> : null}
+              {date ? <div className="flex justify-between gap-4 py-3"><dt className="text-[#66756C]">Date</dt><dd className="text-right font-medium">{displayDate(date)}</dd></div> : null}
+              {time ? <div className="flex justify-between gap-4 py-3"><dt className="text-[#66756C]">Time</dt><dd className="text-right font-medium">{time}</dd></div> : null}
+              {party ? <div className="flex justify-between gap-4 py-3"><dt className="text-[#66756C]">Party size</dt><dd className="text-right font-medium">{party}</dd></div> : null}
+              {contact ? <div className="flex justify-between gap-4 py-3"><dt className="text-[#66756C]">Contact</dt><dd className="break-all text-right font-medium">{contact}</dd></div> : null}
             </dl>
-            {reservation.status === "cancelled" ? <p className="mt-5 rounded-lg bg-[#dce7d5] px-4 py-3 text-sm font-semibold text-[#31503a]">This reservation has already been cancelled.</p> : <button type="button" onClick={confirmCancellation} className="mt-6 w-full rounded-xl bg-[#b85c38] px-5 py-3.5 text-sm font-bold text-white transition hover:bg-[#a64f30] focus:outline-none focus:ring-2 focus:ring-[#b85c38] focus:ring-offset-2">Confirm cancellation</button>}
-            {message && <p role="status" className="mt-3 text-sm text-[#526158]">{message}</p>}
-          </>}
-          <Link href="/" className="mt-6 inline-block text-sm font-semibold text-[#a64f30] underline underline-offset-4">Return to Juniper Table</Link>
-        </section>
-        <p className="mt-5 text-center text-xs text-[#758077]">Reservations are stored in this browser only.</p>
+            {result ? <p role="status" className="mt-4 rounded-lg bg-[#DCE7D5] px-4 py-3 text-sm text-[#26362F]">{result}</p> : null}
+            {!isCanceled(reservation) ? (
+              <div className="mt-6">
+                <p className="mb-4 text-sm leading-6 text-[#66756C]">Canceling will release your table. This action cannot be undone.</p>
+                <Button variant="danger" onClick={cancelReservation} disabled={working} className="w-full sm:w-auto">{working ? "Canceling…" : "Cancel reservation"}</Button>
+              </div>
+            ) : (
+              <p className="mt-5 text-sm text-[#52645A]">This reservation is already canceled. If you need another table, you can make a new booking.</p>
+            )}
+          </Card>
+        ) : (
+          <Card className="mt-8 border-[#E8DED0] bg-[#FFFDF8] p-5 shadow-sm sm:p-7">
+            <h2 className="font-serif text-2xl">We couldn’t find that reservation</h2>
+            <p className="mt-3 text-sm leading-6 text-[#52645A]">The cancellation link may be incomplete or the reservation may not be saved in this browser. Check that you’re using the original confirmation link, or contact Juniper Table for help.</p>
+          </Card>
+        )}
       </div>
     </main>
   );
