@@ -1,225 +1,141 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { readLocal, writeLocal } from "@/lib/persist";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { availableTimes, formatServiceDate, loadReservations, localDateString, PARTY_SIZES, Reservation, saveReservations, serviceDateOptions, SERVICE_TIMES } from "@/lib/reservations";
 
-type Reservation = {
-  id?: string | number;
-  reservationId?: string | number;
-  name?: string;
-  guestName?: string;
-  email?: string;
-  phone?: string;
-  contact?: string;
-  date?: string;
-  serviceDate?: string;
-  time?: string;
-  serviceTime?: string;
-  partySize?: number | string;
-  guests?: number | string;
-  status?: string;
-  cancelled?: boolean;
-  canceled?: boolean;
-  cancelledAt?: string;
-  canceledAt?: string;
-  [key: string]: unknown;
-};
+const inputClass = "mt-1 w-full rounded-lg border border-[#d9d1c2] bg-white px-3 py-2.5 text-sm text-[#26362f] outline-none focus:border-[#b85c38] focus:ring-2 focus:ring-[#b85c38]/20";
 
-const STORAGE_KEYS = [
-  "juniper-table-reservations",
-  "juniper-reservations",
-  "reservations",
-  "juniperReservations",
-];
-
-function isReservationList(value: unknown): value is Reservation[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "object" && entry !== null);
-}
-
-function localDateValue(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatDate(value: string) {
-  const parts = value.split("-").map(Number);
-  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return value;
-  return new Date(parts[0], parts[1] - 1, parts[2]).toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function reservationDate(reservation: Reservation) {
-  return typeof reservation.date === "string"
-    ? reservation.date
-    : typeof reservation.serviceDate === "string"
-      ? reservation.serviceDate
-      : "";
-}
-
-function isCanceled(reservation: Reservation) {
-  const status = typeof reservation.status === "string" ? reservation.status.toLowerCase() : "";
-  return reservation.cancelled === true || reservation.canceled === true || Boolean(reservation.cancelledAt || reservation.canceledAt) || status === "cancelled" || status === "canceled";
-}
+type EditValues = Pick<Reservation, "guestName" | "email" | "phone" | "date" | "time" | "partySize">;
 
 export default function ManagePage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
-  const [selectedDate, setSelectedDate] = useState(() => localDateValue(new Date()));
-  const [storageKey, setStorageKey] = useState(STORAGE_KEYS[0]);
-  const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [editValues, setEditValues] = useState<EditValues | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [createValues, setCreateValues] = useState<EditValues>({ guestName: "", email: "", phone: "", date: "", time: SERVICE_TIMES[0], partySize: 2 });
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    let found: Reservation[] | null = null;
-    let foundKey = STORAGE_KEYS[0];
-
-    for (const key of STORAGE_KEYS) {
-      const value = readLocal<unknown>(key, null);
-      if (isReservationList(value)) {
-        if (found === null || (found.length === 0 && value.length > 0)) {
-          found = value;
-          foundKey = key;
-        }
-        if (value.length > 0) break;
-      }
-    }
-
-    setReservations(found ?? []);
-    setStorageKey(foundKey);
-    setLoading(false);
+    const saved = loadReservations();
+    const today = localDateString(new Date());
+    setReservations(saved);
+    setSelectedDate(saved.some((item) => item.date === today) ? today : saved[0]?.date ?? today);
+    setCreateValues((value) => ({ ...value, date: today }));
+    setReady(true);
   }, []);
 
-  const dayReservations = useMemo(
-    () => reservations.filter((reservation) => reservationDate(reservation) === selectedDate),
-    [reservations, selectedDate],
-  );
-  const activeCount = dayReservations.filter((reservation) => !isCanceled(reservation)).length;
-  const canceledCount = dayReservations.length - activeCount;
+  const dateOptions = useMemo(() => {
+    const values = new Set([...serviceDateOptions(30), ...reservations.map((item) => item.date)]);
+    return Array.from(values).sort();
+  }, [reservations]);
+  const dayReservations = reservations.filter((item) => item.date === selectedDate).sort((a, b) => SERVICE_TIMES.indexOf(a.time) - SERVICE_TIMES.indexOf(b.time));
+  const activeCount = dayReservations.filter((item) => item.status === "confirmed").length;
+  const guestCount = dayReservations.filter((item) => item.status === "confirmed").reduce((total, item) => total + item.partySize, 0);
 
-  function updateReservation(target: Reservation) {
-    const updated = reservations.map((reservation) => {
-      const targetId = target.id ?? target.reservationId;
-      const currentId = reservation.id ?? reservation.reservationId;
-      return targetId !== undefined && currentId === targetId ? target : reservation;
-    });
-    setReservations(updated);
-    writeLocal(storageKey, updated);
+  function commit(next: Reservation[]) {
+    saveReservations(next);
+    setReservations(next);
+    setNotice("Changes saved in this browser.");
   }
 
-  function toggleCanceled(reservation: Reservation) {
-    const canceled = isCanceled(reservation);
-    updateReservation({
-      ...reservation,
-      status: canceled ? "confirmed" : "cancelled",
-      cancelled: !canceled,
-      canceled: !canceled,
-      ...(canceled ? { cancelledAt: "", canceledAt: "" } : { cancelledAt: new Date().toISOString(), canceledAt: new Date().toISOString() }),
-    });
+  function startEdit(reservation: Reservation) {
+    setEditingId(reservation.id);
+    setEditValues({ guestName: reservation.guestName, email: reservation.email, phone: reservation.phone, date: reservation.date, time: reservation.time, partySize: reservation.partySize });
+    setNotice("");
+  }
+
+  function saveEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editValues || !editingId) return;
+    const latest = loadReservations();
+    if (!availableTimes(latest, editValues.date, editValues.partySize, editingId).includes(editValues.time)) {
+      setNotice("That service time no longer has enough capacity. Choose another time.");
+      return;
+    }
+    const updated = latest.map((item) => item.id === editingId ? { ...item, ...editValues } : item);
+    commit(updated);
+    setEditingId("");
+    setEditValues(null);
+  }
+
+  function createReservation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const latest = loadReservations();
+    if (!availableTimes(latest, createValues.date, createValues.partySize).includes(createValues.time)) {
+      setNotice("That service time is full. Choose another time.");
+      return;
+    }
+    const reservation: Reservation = { ...createValues, id: crypto.randomUUID(), token: crypto.randomUUID(), status: "confirmed", createdAt: new Date().toISOString() };
+    commit([...latest, reservation]);
+    setSelectedDate(reservation.date);
+    setShowCreate(false);
+    setCreateValues({ guestName: "", email: "", phone: "", date: localDateString(new Date()), time: SERVICE_TIMES[0], partySize: 2 });
+  }
+
+  function changeStatus(reservation: Reservation, status: Reservation["status"]) {
+    const latest = loadReservations();
+    commit(latest.map((item) => item.id === reservation.id ? { ...item, status } : item));
+  }
+
+  function formFields(values: EditValues, update: (next: EditValues) => void, idPrefix: string) {
+    const times = availableTimes(reservations, values.date, values.partySize, editingId || undefined);
+    return <div className="grid gap-3 sm:grid-cols-2">
+      <label className="text-xs font-semibold text-[#526158]">Guest name<input className={inputClass} value={values.guestName} onChange={(event) => update({ ...values, guestName: event.target.value })} required /></label>
+      <label className="text-xs font-semibold text-[#526158]">Party size<select className={inputClass} value={values.partySize} onChange={(event) => update({ ...values, partySize: Number(event.target.value) })}>{PARTY_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></label>
+      <label className="text-xs font-semibold text-[#526158]">Email<input className={inputClass} type="email" value={values.email} onChange={(event) => update({ ...values, email: event.target.value })} required /></label>
+      <label className="text-xs font-semibold text-[#526158]">Phone<input className={inputClass} type="tel" value={values.phone} onChange={(event) => update({ ...values, phone: event.target.value })} required /></label>
+      <label className="text-xs font-semibold text-[#526158]">Service date<input className={inputClass} type="date" value={values.date} onChange={(event) => update({ ...values, date: event.target.value })} required /></label>
+      <label className="text-xs font-semibold text-[#526158]">Service time<select className={inputClass} value={values.time} onChange={(event) => update({ ...values, time: event.target.value })} required>
+        {SERVICE_TIMES.map((slot) => <option key={`${idPrefix}-${slot}`} value={slot} disabled={!times.includes(slot) && slot !== values.time}>{slot}{!times.includes(slot) && slot !== values.time ? " — full" : ""}</option>)}
+      </select></label>
+    </div>;
   }
 
   return (
-    <main className="min-h-screen bg-[#F7F2E8] px-4 py-8 text-[#26362F] sm:px-8 sm:py-12">
-      <div className="mx-auto max-w-5xl">
-        <header className="mb-9 flex flex-wrap items-center justify-between gap-4 border-b border-[#DED5C7] pb-6">
-          <Link href="/" className="text-sm font-semibold tracking-wide text-[#26362F] transition hover:text-[#B85C38] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#B85C38]">
-            <span className="font-serif text-2xl">Juniper Table</span>
-            <span className="ml-3 hidden text-xs font-medium uppercase tracking-[0.16em] text-[#68766B] sm:inline">Staff reservations</span>
-          </Link>
-          <Link href="/" className="rounded-lg px-3 py-2 text-sm font-medium text-[#5D6B60] transition hover:bg-[#EAE4D8] hover:text-[#26362F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#B85C38]">
-            Back to the cafe
-          </Link>
+    <main className="min-h-screen bg-[#f7f2e8] px-5 py-7 text-[#26362f] sm:px-8 sm:py-10">
+      <div className="mx-auto max-w-6xl">
+        <header className="flex flex-wrap items-center justify-between gap-4">
+          <div><Link href="/" className="font-serif text-2xl font-semibold tracking-tight">Juniper Table<span className="text-[#b85c38]">.</span></Link><p className="mt-1 text-sm text-[#69756d]">Staff reservation desk</p></div>
+          <Link href="/" className="rounded-lg border border-[#d9d1c2] bg-[#fffdf8] px-4 py-2.5 text-sm font-semibold transition hover:border-[#b85c38]">Guest booking page</Link>
         </header>
 
-        <section className="mb-8 flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#9A563B]">A warm welcome starts here</p>
-            <h1 className="font-serif text-4xl leading-tight text-[#26362F] sm:text-5xl">Reservations</h1>
-            <p className="mt-3 max-w-xl text-sm leading-6 text-[#68766B]">Review the day’s bookings and keep the team up to date.</p>
-          </div>
-          <label className="flex flex-col gap-2 text-sm font-semibold text-[#39483E]">
-            Service date
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
-              className="h-11 rounded-xl border border-[#D8CEBE] bg-[#FFFDF8] px-3 text-[#26362F] shadow-sm outline-none transition focus:border-[#B85C38] focus:ring-2 focus:ring-[#B85C38]/20"
-            />
-          </label>
+        <section className="mt-8 flex flex-col gap-5 rounded-[20px] border border-[#e4dccd] bg-[#fffdf8] p-5 shadow-sm sm:flex-row sm:items-end sm:justify-between sm:p-7">
+          <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#b85c38]">Reservations</p><h1 className="mt-2 font-serif text-3xl">Service overview</h1><p className="mt-1 text-sm text-[#69756d]">Review and manage bookings saved in this browser.</p></div>
+          <label className="w-full text-sm font-semibold sm:max-w-xs">Service date<select className={inputClass} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
+            {dateOptions.map((day) => <option key={day} value={day}>{formatServiceDate(day, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</option>)}
+          </select></label>
         </section>
 
-        <section aria-label="Reservation totals" className="mb-7 grid gap-4 sm:grid-cols-3">
-          <div className="rounded-2xl border border-[#E5DCCF] bg-[#FFFDF8] p-5 shadow-[0_5px_20px_rgba(68,54,37,0.04)]">
-            <p className="text-sm font-medium text-[#68766B]">Bookings for this date</p>
-            <p className="mt-2 text-3xl font-semibold text-[#26362F]">{loading ? <span className="text-[#A69B8B]">—</span> : dayReservations.length}</p>
-          </div>
-          <div className="rounded-2xl border border-[#D8E1D1] bg-[#F0F4EC] p-5">
-            <p className="text-sm font-medium text-[#52694F]">Confirmed</p>
-            <p className="mt-2 text-3xl font-semibold text-[#344B36]">{loading ? <span className="text-[#A69B8B]">—</span> : activeCount}</p>
-          </div>
-          <div className="rounded-2xl border border-[#E5DCCF] bg-[#FFFDF8] p-5">
-            <p className="text-sm font-medium text-[#68766B]">Canceled</p>
-            <p className="mt-2 text-3xl font-semibold text-[#77594A]">{loading ? <span className="text-[#A69B8B]">—</span> : canceledCount}</p>
-          </div>
+        <section className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-2xl border border-[#e4dccd] bg-[#fffdf8] p-5"><p className="text-sm text-[#69756d]">Active reservations</p><p className="mt-1 font-serif text-3xl">{ready ? activeCount : "—"}</p></div>
+          <div className="rounded-2xl border border-[#e4dccd] bg-[#fffdf8] p-5"><p className="text-sm text-[#69756d]">Guests expected</p><p className="mt-1 font-serif text-3xl">{ready ? guestCount : "—"}</p></div>
+          <div className="flex items-center justify-between rounded-2xl border border-[#e4dccd] bg-[#fffdf8] p-5"><div><p className="text-sm text-[#69756d]">Selected service</p><p className="mt-1 font-serif text-xl">{selectedDate ? formatServiceDate(selectedDate, { month: "short", day: "numeric" }) : "—"}</p></div><button type="button" onClick={() => { setShowCreate((value) => !value); setNotice(""); }} className="rounded-lg bg-[#b85c38] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#a64f30] focus:outline-none focus:ring-2 focus:ring-[#b85c38] focus:ring-offset-2">{showCreate ? "Close" : "Add booking"}</button></div>
         </section>
 
-        <section className="rounded-2xl border border-[#E5DCCF] bg-[#FFFDF8] p-4 shadow-[0_8px_28px_rgba(68,54,37,0.05)] sm:p-6">
-          <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2 border-b border-[#EEE7DC] pb-4">
-            <h2 className="font-serif text-2xl text-[#26362F]">{loading ? "Reservations" : formatDate(selectedDate)}</h2>
-            {!loading && <p className="text-sm text-[#778176]">{dayReservations.length} {dayReservations.length === 1 ? "reservation" : "reservations"}</p>}
-          </div>
+        {notice && <p role="status" className="mt-4 rounded-lg bg-[#dce7d5] px-4 py-3 text-sm text-[#31503a]">{notice}</p>}
 
-          {loading ? (
-            <div role="status" className="rounded-xl border border-[#E8E0D4] bg-[#FAF7F0] px-5 py-8 text-center text-sm text-[#68766B]">
-              Loading reservations…
-            </div>
-          ) : dayReservations.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-[#D8CEBE] bg-[#FAF7F0] px-5 py-10 text-center">
-              <p className="font-serif text-xl text-[#39483E]">No reservations yet</p>
-              <p className="mt-2 text-sm text-[#778176]">Bookings for {formatDate(selectedDate)} will appear here.</p>
-            </div>
-          ) : (
-            <ul className="space-y-3">
-              {dayReservations.map((reservation, index) => {
-                const canceled = isCanceled(reservation);
-                const guest = reservation.guestName ?? reservation.name ?? "Guest";
-                const serviceTime = reservation.serviceTime ?? reservation.time ?? "Time not set";
-                const partySize = reservation.partySize ?? reservation.guests ?? "—";
-                const contact = reservation.email ?? reservation.phone ?? reservation.contact;
-                const identity = reservation.id ?? reservation.reservationId ?? `${guest}-${serviceTime}-${index}`;
-                return (
-                  <li key={String(identity)} className={`flex flex-col gap-4 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${canceled ? "border-[#E8DCD0] bg-[#F7F3ED]" : "border-[#E5DCCF] bg-white"}`}>
-                    <div className="flex min-w-0 items-start gap-4">
-                      <div className="min-w-[78px] rounded-lg bg-[#F3E8DB] px-3 py-2 text-center text-sm font-semibold text-[#8C4B32]">{serviceTime}</div>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className={`font-semibold ${canceled ? "text-[#756E64]" : "text-[#26362F]"}`}>{guest}</h3>
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${canceled ? "bg-[#EEE7DC] text-[#756E64]" : "bg-[#E6EFE2] text-[#3E6841]"}`}>
-                            {canceled ? "Canceled" : "Confirmed"}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-sm text-[#68766B]">{partySize} {String(partySize) === "1" ? "guest" : "guests"}{contact ? ` · ${contact}` : ""}</p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => toggleCanceled(reservation)}
-                      className={`min-h-10 shrink-0 rounded-lg border px-4 text-sm font-semibold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#B85C38] ${canceled ? "border-[#C9D7C3] bg-[#F0F4EC] text-[#3E6841] hover:bg-[#E5EEDF]" : "border-[#E0C1B2] bg-[#FBF0E9] text-[#9A4E32] hover:bg-[#F5E5DA]"}`}
-                    >
-                      {canceled ? "Restore booking" : "Cancel booking"}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+        {showCreate && <form onSubmit={createReservation} className="mt-5 rounded-2xl border border-[#e4dccd] bg-[#fffdf8] p-5 sm:p-6">
+          <h2 className="mb-4 font-serif text-2xl">Create reservation</h2>
+          {formFields(createValues, setCreateValues, "create")}
+          <div className="mt-4 flex gap-2"><button className="rounded-lg bg-[#b85c38] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#a64f30]" type="submit">Save reservation</button><button className="rounded-lg border border-[#d9d1c2] px-4 py-2.5 text-sm font-semibold" type="button" onClick={() => setShowCreate(false)}>Cancel</button></div>
+        </form>}
+
+        <section className="mt-6 overflow-hidden rounded-[20px] border border-[#e4dccd] bg-[#fffdf8]">
+          <div className="border-b border-[#eee7da] px-5 py-4 sm:px-6"><h2 className="font-serif text-2xl">{selectedDate ? formatServiceDate(selectedDate) : "Service reservations"}</h2><p className="mt-1 text-sm text-[#69756d]">{dayReservations.length} {dayReservations.length === 1 ? "booking" : "bookings"} · cancelled bookings remain visible below</p></div>
+          {!ready ? <p className="px-6 py-10 text-sm text-[#69756d]">Loading reservations…</p> : dayReservations.length === 0 ? <div className="px-6 py-12 text-center"><p className="font-serif text-xl">No reservations for this service.</p><p className="mt-2 text-sm text-[#69756d]">Add a booking or choose another date.</p></div> : <div className="divide-y divide-[#eee7da]">
+            {dayReservations.map((reservation) => editingId === reservation.id && editValues ? <form key={reservation.id} onSubmit={saveEdit} className="space-y-4 bg-[#f8f5ee] p-5 sm:p-6">
+              <h3 className="font-serif text-xl">Edit reservation</h3>{formFields(editValues, setEditValues, reservation.id)}
+              <div className="flex gap-2"><button type="submit" className="rounded-lg bg-[#b85c38] px-4 py-2 text-sm font-bold text-white">Save changes</button><button type="button" onClick={() => { setEditingId(""); setEditValues(null); }} className="rounded-lg border border-[#d9d1c2] px-4 py-2 text-sm font-semibold">Discard</button></div>
+            </form> : <article key={reservation.id} className={`flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6 ${reservation.status === "cancelled" ? "bg-[#f5f2eb] opacity-75" : ""}`}>
+              <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{reservation.guestName}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${reservation.status === "confirmed" ? "bg-[#dce7d5] text-[#31503a]" : "bg-[#eee5dd] text-[#795846]"}`}>{reservation.status === "confirmed" ? "Confirmed" : "Cancelled"}</span></div><p className="mt-1 text-sm text-[#526158]">{reservation.time} · {reservation.partySize} {reservation.partySize === 1 ? "guest" : "guests"}</p><p className="mt-1 break-all text-xs text-[#69756d]">{reservation.email} · {reservation.phone}</p></div>
+              <div className="flex shrink-0 flex-wrap gap-2"><button type="button" onClick={() => startEdit(reservation)} className="rounded-lg border border-[#d9d1c2] px-3 py-2 text-xs font-semibold hover:border-[#b85c38]">Edit</button>{reservation.status === "confirmed" ? <button type="button" onClick={() => changeStatus(reservation, "cancelled")} className="rounded-lg border border-[#c99884] px-3 py-2 text-xs font-semibold text-[#91452d] hover:bg-[#f8e8df]">Cancel booking</button> : <button type="button" onClick={() => changeStatus(reservation, "confirmed")} className="rounded-lg border border-[#9daf98] px-3 py-2 text-xs font-semibold text-[#31503a] hover:bg-[#dce7d5]">Restore booking</button>}</div>
+            </article>)}
+          </div>}
         </section>
-
-        <p className="mt-6 text-center text-xs leading-5 text-[#827B70]">Reservations are saved in this browser only and are not synced between devices.</p>
+        <p className="mt-5 text-center text-xs text-[#758077]">Staff changes are stored locally in this browser and are not shared across devices.</p>
       </div>
     </main>
   );
