@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Nook & Table",
+  title: "CornerTable",
   description: "A lightweight, low-chaos table booking and reservation management system tailored specifically for neighborhood cafes.",
 };
 
