@@ -305,7 +305,7 @@ export function ZoneCard({
   return (
     <div
       onClick={onClick}
-      className={`group cursor-pointer relative overflow-hidden rounded-xl border transition-all duration-200 ${'isSelected' ? 'ring-2 ring-amber-600 border-amber-600 shadow-lg bg-stone-50' : 'border-stone-200 hover:border-stone-400 bg-white hover:shadow-md'}`}
+      className={`group cursor-pointer relative overflow-hidden rounded-xl border transition-all duration-200 ${isSelected ? 'ring-2 ring-amber-600 border-amber-600 shadow-lg bg-stone-50' : 'border-stone-200 hover:border-stone-400 bg-white hover:shadow-md'}`}
     >
       <div className="relative h-28 overflow-hidden">
         <img
@@ -493,137 +493,65 @@ export function BookingReceiptCard({
       {/* Receipt Top Header */}
       <div className="bg-stone-900 text-stone-100 p-6 text-center relative">
         <div className="w-12 h-12 bg-amber-600/20 text-amber-400 rounded-full flex items-center justify-center mx-auto mb-2 border border-amber-500/30">
-          <CheckCircleIcon className="w-7 h-7 text-amber-400" />
+          <CheckCircleIcon className="w-6 h-6" />
         </div>
-        <p className="text-xs font-semibold text-amber-400 tracking-wider uppercase">Reservation Confirmed</p>
-        <h2 className="text-2xl font-serif font-bold text-white mt-1">{cafeName}</h2>
-        <div className="mt-3 inline-block px-4 py-1.5 bg-stone-800 rounded-full border border-stone-700 text-xs font-mono text-amber-300 font-bold tracking-widest">
+        <h3 className="text-xl font-serif font-bold text-white">Table Reserved Successfully</h3>
+        <p className="text-stone-400 text-xs mt-1">{cafeName} — Confirmation Code</p>
+        <div className="mt-3 inline-block bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono font-bold text-lg px-4 py-1.5 rounded-lg">
           {booking.confirmationCode}
         </div>
       </div>
 
-      {/* Receipt Body */}
-      <div className="p-6 space-y-4 bg-stone-50/60">
-        <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm space-y-3">
-          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
-            <span className="text-stone-500 font-medium">Guest Name</span>
+      {/* Receipt Details */}
+      <div className="p-6 space-y-4 text-stone-700 text-sm">
+        <div className="grid grid-cols-2 gap-4 pb-4 border-b border-stone-100">
+          <div>
+            <span className="block text-xs text-stone-400 uppercase tracking-wider font-medium">Guest Name</span>
             <span className="font-semibold text-stone-900">{booking.guestName}</span>
           </div>
-          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
-            <span className="text-stone-500 font-medium">Party Size</span>
+          <div>
+            <span className="block text-xs text-stone-400 uppercase tracking-wider font-medium">Party Size</span>
             <span className="font-semibold text-stone-900">{booking.partySize} Guests</span>
           </div>
-          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
-            <span className="text-stone-500 font-medium">Date & Time</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 pb-4 border-b border-stone-100">
+          <div>
+            <span className="block text-xs text-stone-400 uppercase tracking-wider font-medium">Date & Time</span>
             <span className="font-semibold text-stone-900">{booking.date} at {booking.time}</span>
           </div>
-          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
-            <span className="text-stone-500 font-medium">Seating Zone</span>
-            <span className="font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs">
-              {booking.zone}
-            </span>
-          </div>
-          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
-            <span className="text-stone-500 font-medium">Contact Email</span>
-            <span className="text-stone-800 text-xs font-mono">{booking.email}</span>
-          </div>
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-stone-500 font-medium">Contact Phone</span>
-            <span className="text-stone-800 text-xs font-mono">{booking.phone}</span>
+          <div>
+            <span className="block text-xs text-stone-400 uppercase tracking-wider font-medium">Assigned Zone</span>
+            <span className="font-semibold text-stone-900">{booking.zone}</span>
           </div>
         </div>
 
         {booking.specialRequest && (
-          <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-900">
-            <span className="font-semibold text-amber-800 block mb-0.5">Special Request:</span>
-            "{booking.specialRequest}"
+          <div className="pb-4 border-b border-stone-100">
+            <span className="block text-xs text-stone-400 uppercase tracking-wider font-medium">Special Requests</span>
+            <span className="text-stone-700 italic text-xs mt-0.5 block">"{booking.specialRequest}"</span>
           </div>
         )}
 
-        <p className="text-[11px] text-center text-stone-500 font-light italic">
-          Please arrive 5 minutes prior to your reserved time. We hold reservations for up to 15 minutes.
-        </p>
-
-        {onDone && (
-          <div className="pt-2">
-            <Button variant="primary" className="w-full justify-center py-2.5 text-sm" onClick={onDone}>
-              Back to Booking Overview
-            </Button>
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-export function TimelineBookingRow({
-  booking,
-  tableName,
-  isHighlighted,
-  onMarkSeated,
-}: {
-  booking: Booking;
-  tableName?: string;
-  isHighlighted?: boolean;
-  onMarkSeated?: (bookingId: string) => void;
-}) {
-  const statusTone =
-    booking.status === "seated"
-      ? "pass"
-      : booking.status === "confirmed"
-      ? "warn"
-      : "neutral";
-
-  return (
-    <div
-      className={`p-4 rounded-xl border transition-all duration-200 ${isHighlighted ? 'bg-amber-50/90 border-amber-400 ring-2 ring-amber-300 shadow-md' : 'bg-white border-stone-200 hover:border-stone-300 shadow-sm'}`}
-    >
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div className="p-2.5 bg-stone-100 rounded-lg text-stone-700 border border-stone-200 font-mono text-xs font-bold text-center min-w-[65px]">
-            <ClockIcon className="w-3.5 h-3.5 text-amber-600 mx-auto mb-0.5" />
-            {booking.time}
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h4 className="font-serif font-bold text-stone-900 text-base">{booking.guestName}</h4>
-              <Badge tone={statusTone}>
-                {booking.status === "seated" ? "Seated (Emerald)" : booking.status === "confirmed" ? "Reserved (Amber)" : booking.status}
-              </Badge>
-            </div>
-            <p className="text-xs text-stone-500 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span>Party of {booking.partySize}</span>
-              <span>•</span>
-              <span className="font-medium text-stone-700">{tableName || booking.zone}</span>
-              <span>•</span>
-              <span className="font-mono text-stone-400">{booking.confirmationCode}</span>
-            </p>
-            {booking.specialRequest && (
-              <p className="text-xs text-amber-800 bg-amber-50/80 px-2 py-1 rounded border border-amber-200 mt-2 font-light">
-                <span className="font-semibold">Request:</span> {booking.specialRequest}
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 self-end sm:self-center">
-          {booking.status === "confirmed" && onMarkSeated && (
+        <div className="pt-2 flex items-center justify-between gap-3">
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={() => window.print()}
+          >
+            Print Receipt
+          </Button>
+          {onDone && (
             <Button
               variant="primary"
-              size="sm"
-              onClick={() => onMarkSeated(booking.id)}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm font-semibold text-xs py-1.5"
+              className="w-full bg-amber-600 text-white hover:bg-amber-700"
+              onClick={onDone}
             >
-              Mark as Seated
+              Done
             </Button>
-          )}
-          {booking.status === "seated" && (
-            <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
-              ✓ Guest Seated
-            </span>
           )}
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
