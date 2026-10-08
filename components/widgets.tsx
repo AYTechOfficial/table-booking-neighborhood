@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Button, Card, Badge, EmptyState, ListRow } from "@/components/ui";
+import { readLocal, writeLocal } from "@/lib/persist";
+
+// --- SHARED CONSTANTS & TYPES ---
+export const STORAGE_KEY = "lastmile:table-booking-neighborhood:cafes";
 
 export type RecordItem = {
   id: string;
@@ -10,452 +14,616 @@ export type RecordItem = {
   createdAt: string;
 };
 
-export type ReservationStatus = "confirmed" | "seated" | "cancelled" | "no-show";
-
-export type Reservation = {
+export type TableZone = {
   id: string;
   name: string;
-  phone: string;
+  zone: string;
+  capacity: number;
+  position: { x: number; y: number };
+  status?: "available" | "reserved" | "seated" | "blocked";
+};
+
+export type Booking = {
+  id: string;
+  confirmationCode: string;
+  guestName: string;
   email: string;
+  phone: string;
   partySize: number;
   date: string;
   time: string;
-  status: ReservationStatus;
-  walkIn: boolean;
+  tableId: string;
+  zone: string;
+  specialRequest: string;
+  status: "confirmed" | "seated" | "completed" | "cancelled";
   createdAt: string;
 };
 
-export type Settings = {
-  openTime: string;
-  closeTime: string;
-  slotMinutes: number;
-  maxCovers: number;
+export type CafeMetadata = {
+  name: string;
+  tagline: string;
+  coverImage: string;
+  openHours: string;
 };
 
-export const RESERVATIONS_KEY = "lastmile:table-booking-neighborhood:reservations";
-
-export const DEFAULT_SETTINGS: Settings = {
-  openTime: "11:00",
-  closeTime: "22:00",
-  slotMinutes: 30,
-  maxCovers: 24,
+export type CafeData = {
+  metadata: CafeMetadata;
+  tables: TableZone[];
+  bookings: Booking[];
 };
 
-export const STATUS_META: Record<ReservationStatus, { label: string; tone: "brand" | "pass" | "warn" | "bad" | "neutral" }> = {
-  confirmed: { label: "Confirmed", tone: "brand" },
-  seated: { label: "Seated", tone: "pass" },
-  cancelled: { label: "Cancelled", tone: "bad" },
-  "no-show": { label: "No-Show", tone: "warn" },
-};
-
-export function toMinutes(hhmm: string): number {
-  const [h, m] = hhmm.split(":").map(Number);
-  return (h || 0) * 60 + (m || 0);
+// --- PERSISTENCE HELPERS ---
+export function getTodayDateString(): string {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-export function toHHMM(mins: number): string {
-  const clamped = Math.max(0, Math.min(1439, Math.round(mins)));
-  const h = Math.floor(clamped / 60);
-  const m = clamped % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+export function getDefaultCafeData(): CafeData {
+  const todayStr = getTodayDateString();
+  return {
+    metadata: {
+      name: "Nook & Table",
+      tagline: "Artisanal Coffee & Cozy Dining Nooks",
+      coverImage:
+        "https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&q=80&w=1200",
+      openHours: "7:00 AM - 9:00 PM Daily",
+    },
+    tables: [
+      { id: "t1", name: "Table 1 (Window Nook)", zone: "Window Nook", capacity: 2, position: { x: 1, y: 1 } },
+      { id: "t2", name: "Table 2 (Window Nook)", zone: "Window Nook", capacity: 2, position: { x: 2, y: 1 } },
+      { id: "t3", name: "Table 3 (Main Dining)", zone: "Main Dining", capacity: 4, position: { x: 1, y: 2 } },
+      { id: "t4", name: "Table 4 (Main Dining)", zone: "Main Dining", capacity: 4, position: { x: 2, y: 2 } },
+      { id: "t5", name: "Table 5 (Main Dining)", zone: "Main Dining", capacity: 6, position: { x: 3, y: 2 } },
+      { id: "t6", name: "Table 6 (Sunny Patio)", zone: "Sunny Patio", capacity: 4, position: { x: 1, y: 3 } },
+      { id: "t7", name: "Table 7 (Sunny Patio)", zone: "Sunny Patio", capacity: 8, position: { x: 2, y: 3 } },
+    ],
+    bookings: [
+      {
+        id: "b-8821",
+        confirmationCode: "NT-8821",
+        guestName: "Elena Rostova",
+        email: "elena@example.com",
+        phone: "555-0192",
+        partySize: 2,
+        date: todayStr,
+        time: "10:00 AM",
+        tableId: "t1",
+        zone: "Window Nook",
+        specialRequest: "High chair needed",
+        status: "confirmed",
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "b-1042",
+        confirmationCode: "NT-1042",
+        guestName: "Marcus Vance",
+        email: "marcus@example.com",
+        phone: "555-0841",
+        partySize: 4,
+        date: todayStr,
+        time: "12:30 PM",
+        tableId: "t3",
+        zone: "Main Dining",
+        specialRequest: "Quiet corner requested for lunch meeting",
+        status: "seated",
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  };
 }
 
-export function todayISO(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+export function loadCafeData(): CafeData {
+  return readLocal<CafeData>(STORAGE_KEY, getDefaultCafeData());
 }
 
-export function formatDate(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  if (!y || !m || !d) return iso;
-  const date = new Date(y, m - 1, d);
-  return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+export function saveCafeData(data: CafeData): void {
+  writeLocal(STORAGE_KEY, data);
 }
 
-export function formatTime(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  if (Number.isNaN(h) || Number.isNaN(m)) return hhmm;
-  const period = h >= 12 ? "PM" : "AM";
-  const hour = h % 12 === 0 ? 12 : h % 12;
-  return `${hour}:${String(m).padStart(2, "0")} ${period}`;
-}
-
-export function generateRef(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let out = "";
-  for (let i = 0; i < 6; i += 1) {
-    out += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
-  return `CT-${out}`;
-}
-
-export function generateId(): string {
-  return `res-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export function slotTimes(settings: Settings): string[] {
-  const start = toMinutes(settings.openTime);
-  const end = toMinutes(settings.closeTime);
-  const step = Math.max(5, settings.slotMinutes);
-  const out: string[] = [];
-  for (let t = start; t <= end; t += step) {
-    out.push(toHHMM(t));
-  }
-  return out;
-}
-
-export function coversForDate(reservations: Reservation[], date: string): number {
-  return reservations
-    .filter((r) => r.date === date && (r.status === "confirmed" || r.status === "seated"))
-    .reduce((sum, r) => sum + r.partySize, 0);
-}
-
-export function coversForSlot(reservations: Reservation[], date: string, time: string): number {
-  return reservations
-    .filter((r) => r.date === date && r.time === time && (r.status === "confirmed" || r.status === "seated"))
-    .reduce((sum, r) => sum + r.partySize, 0);
-}
-
-export function remainingCovers(reservations: Reservation[], settings: Settings, date: string, time: string): number {
-  return Math.max(0, settings.maxCovers - coversForSlot(reservations, date, time));
-}
-
-export function isSlotAvailable(reservations: Reservation[], settings: Settings, date: string, time: string, partySize: number): boolean {
-  return remainingCovers(reservations, settings, date, time) >= partySize;
-}
-
-export function StatTile({ label, value, hint, tone = "neutral" }: { label: string; value: string | number; hint?: string; tone?: "brand" | "pass" | "warn" | "bad" | "neutral" }) {
+// --- ICONS ---
+export function CoffeeIcon({ className = "w-5 h-5" }: { className?: string }) {
   return (
-    <Card className="flex flex-col gap-1 p-3">
-      <span className="text-[11px] font-medium uppercase tracking-wider text-[#7c8595]">{label}</span>
-      <span className="font-mono text-2xl leading-none text-[#e6e9ef]">{value}</span>
-      {hint ? (
-        <span className="flex items-center gap-1 text-[11px] text-[#7c8595]">
-          <Badge tone={tone}>{hint}</Badge>
-        </span>
-      ) : null}
-    </Card>
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 8h1a4 4 0 010 8h-1M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8zM6 1v3M10 1v3M14 1v3" />
+    </svg>
   );
 }
 
-export function StatusBadge({ status }: { status: ReservationStatus }) {
-  const meta = STATUS_META[status];
-  return <Badge tone={meta.tone}>{meta.label}</Badge>;
-}
-
-export function PartySizePicker({ value, onChange, max = 12 }: { value: number; onChange: (n: number) => void; max?: number }) {
+export function ClockIcon({ className = "w-4 h-4" }: { className?: string }) {
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {Array.from({ length: max }, (_, i) => i + 1).map((n) => (
-        <button
-          key={n}
-          type="button"
-          onClick={() => onChange(n)}
-          className={`h-9 w-9 rounded-md border font-mono text-sm transition-colors ${
-            value === n
-              ? "border-[#4f8cff] bg-[#4f8cff]/15 text-[#4f8cff]"
-              : "border-[#262b33] bg-[#14171c] text-[#9aa3b2] hover:border-[#3a4150] hover:text-[#e6e9ef]"
-          }`}
-        >
-          {n}
-        </button>
-      ))}
-    </div>
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
   );
 }
 
-export function TimeSlotGrid({
-  settings,
-  reservations,
-  date,
-  partySize,
-  selected,
-  onSelect,
+export function CalendarIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    </svg>
+  );
+}
+
+export function UsersIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+    </svg>
+  );
+}
+
+export function MapPinIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
+
+export function SparklesIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+    </svg>
+  );
+}
+
+export function CheckCircleIcon({ className = "w-5 h-5" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+// --- UI COMPONENTS --- 
+
+export function CafeHeader({
+  metadata,
+  activeTab,
+  onTabChange,
 }: {
-  settings: Settings;
-  reservations: Reservation[];
-  date: string;
-  partySize: number;
-  selected: string | null;
-  onSelect: (time: string) => void;
+  metadata: CafeMetadata;
+  activeTab?: "guest" | "host" | "settings";
+  onTabChange?: (tab: "guest" | "host" | "settings") => void;
 }) {
-  const times = slotTimes(settings);
-  if (times.length === 0) {
-    return (
-      <EmptyState
-        title="No open slots"
-        message="Operating hours are not set. Update them in Manager settings to enable bookings."
+  return (
+    <header className="relative bg-stone-900 text-stone-100 rounded-2xl overflow-hidden shadow-xl mb-6 border border-stone-800">
+      <div
+        className="absolute inset-0 bg-cover bg-center opacity-30 mix-blend-overlay filter blur-[1px]"
+        style={{ backgroundImage: `url(${metadata.coverImage})` }}
       />
+      <div className="relative z-10 p-6 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-6 bg-gradient-to-t from-stone-950/90 via-stone-900/60 to-transparent">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 backdrop-blur-md">
+              <CoffeeIcon className="w-3.5 h-3.5" />
+              Artisanal Booking Hub
+            </span>
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 backdrop-blur-md">
+              <ClockIcon className="w-3.5 h-3.5" />
+              {metadata.openHours}
+            </span>
+          </div>
+          <h1 className="text-3xl md:text-4xl font-serif font-bold tracking-tight text-white">
+            {metadata.name}
+          </h1>
+          <p className="text-stone-300 text-sm md:text-base mt-1 font-light max-w-xl">
+            {metadata.tagline}
+          </p>
+        </div>
+
+        {onTabChange && (
+          <div className="flex items-center gap-1.5 bg-stone-900/80 p-1.5 rounded-xl border border-stone-800/80 backdrop-blur-md self-start md:self-center">
+            <button
+              onClick={() => onTabChange("guest")}
+              className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${'guest' === activeTab ? 'bg-amber-600 text-white shadow-md' : 'text-stone-400 hover:text-white hover:bg-stone-800/60'}`}
+            >
+              Guest View
+            </button>
+            <button
+              onClick={() => onTabChange("host")}
+              className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${'host' === activeTab ? 'bg-amber-600 text-white shadow-md' : 'text-stone-400 hover:text-white hover:bg-stone-800/60'}`}
+            >
+              Host Stand
+            </button>
+            <button
+              onClick={() => onTabChange("settings")}
+              className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${'settings' === activeTab ? 'bg-amber-600 text-white shadow-md' : 'text-stone-400 hover:text-white hover:bg-stone-800/60'}`}
+            >
+              Cafe Setup
+            </button>
+          </div>
+        )}
+      </div>
+    </header>
+  );
+}
+
+export function StatCard({
+  label,
+  value,
+  icon,
+  subtext,
+  accentColor = "amber",
+}: {
+  label: string;
+  value: string | number;
+  icon?: React.ReactNode;
+  subtext?: string;
+  accentColor?: "amber" | "emerald" | "blue" | "stone";
+}) {
+  const accentStyles = {
+    amber: "border-amber-200 text-amber-700 bg-amber-50/50",
+    emerald: "border-emerald-200 text-emerald-700 bg-emerald-50/50",
+    blue: "border-blue-200 text-blue-700 bg-blue-50/50",
+    stone: "border-stone-200 text-stone-700 bg-stone-50/50",
+  };
+
+  return (
+    <Card className="p-4 flex items-center gap-4 bg-white border border-stone-200 shadow-sm rounded-xl hover:shadow-md transition-shadow">
+      {icon && (
+        <div className={`p-3 rounded-lg border ${accentStyles[accentColor]}`}>
+          {icon}
+        </div>
+      )}
+      <div>
+        <p className="text-xs font-medium text-stone-500 uppercase tracking-wider">{label}</p>
+        <p className="text-2xl font-bold text-stone-900 font-serif tracking-tight mt-0.5">{value}</p>
+        {subtext && <p className="text-xs text-stone-500 mt-0.5">{subtext}</p>}
+      </div>
+    </Card>
+  );
+}
+
+export function ZoneCard({
+  zoneName,
+  capacityText,
+  availableCount,
+  isSelected,
+  onClick,
+}: {
+  zoneName: string;
+  capacityText: string;
+  availableCount: number;
+  isSelected: boolean;
+  onClick: () => void;
+}) {
+  const zoneImageMap: Record<string, string> = {
+    "Window Nook": "https://images.unsplash.com/photo-1521017432531-fbd92d768814?auto=format&fit=crop&q=80&w=400",
+    "Main Dining": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&q=80&w=400",
+    "Sunny Patio": "https://images.unsplash.com/photo-1543007630-9710e4a00a20?auto=format&fit=crop&q=80&w=400",
+  };
+
+  const imageUrl = zoneImageMap[zoneName] || "https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&q=80&w=400";
+
+  return (
+    <div
+      onClick={onClick}
+      className={`group cursor-pointer relative overflow-hidden rounded-xl border transition-all duration-200 ${'isSelected' ? 'ring-2 ring-amber-600 border-amber-600 shadow-lg bg-stone-50' : 'border-stone-200 hover:border-stone-400 bg-white hover:shadow-md'}`}
+    >
+      <div className="relative h-28 overflow-hidden">
+        <img
+          src={imageUrl}
+          alt={zoneName}
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+        <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between text-white">
+          <span className="font-serif font-bold text-base tracking-wide">{zoneName}</span>
+          <Badge tone={availableCount > 0 ? "pass" : "neutral"}>
+            {availableCount > 0 ? `${availableCount} Open` : "Full"}
+          </Badge>
+        </div>
+      </div>
+      <div className="p-3 flex items-center justify-between text-xs text-stone-600">
+        <span className="flex items-center gap-1 text-stone-600">
+          <UsersIcon className="w-3.5 h-3.5 text-stone-400" />
+          {capacityText}
+        </span>
+        <span className={`font-semibold ${isSelected ? 'text-amber-700' : 'text-stone-500'}`}>
+          {isSelected ? "✓ Selected Zone" : "Click to Select"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export function InteractiveFloorPlan({
+  tables,
+  bookingsForDate,
+  selectedTableId,
+  onSelectTable,
+}: {
+  tables: TableZone[];
+  bookingsForDate: Booking[];
+  selectedTableId?: string;
+  onSelectTable?: (table: TableZone) => void;
+}) {
+  // Group tables by zone
+  const zones = Array.from(new Set(tables.map((t) => t.zone)));
+
+  const getTableStatus = (tableId: string): {
+    status: "available" | "reserved" | "seated";
+    booking?: Booking;
+  } => {
+    const activeBooking = bookingsForDate.find(
+      (b) => b.tableId === tableId && (b.status === "confirmed" || b.status === "seated")
     );
-  }
-  return (
-    <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6">
-      {times.map((time) => {
-        const remaining = remainingCovers(reservations, settings, date, time);
-        const available = remaining >= partySize;
-        const isSelected = selected === time;
-        return (
-          <button
-            key={time}
-            type="button"
-            disabled={!available}
-            onClick={() => onSelect(time)}
-            className={`flex flex-col items-center gap-0.5 rounded-md border px-2 py-2 font-mono text-sm transition-colors ${
-              isSelected
-                ? "border-[#4f8cff] bg-[#4f8cff]/15 text-[#4f8cff]"
-                : available
-                ? "border-[#262b33] bg-[#14171c] text-[#e6e9ef] hover:border-[#3a4150]"
-                : "cursor-not-allowed border-[#1c2027] bg-[#0f1216] text-[#4a5260]"
-            }`}
-          >
-            <span>{formatTime(time)}</span>
-            <span className={`text-[10px] ${available ? "text-[#7c8595]" : "text-[#4a5260]"}`}>{available ? `${remaining} left` : "Full"}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+    if (!activeBooking) return { status: "available" };
+    if (activeBooking.status === "seated") return { status: "seated", booking: activeBooking };
+    return { status: "reserved", booking: activeBooking };
+  };
 
-export function ReservationRow({
-  reservation,
-  actions,
-}: {
-  reservation: Reservation;
-  actions?: React.ReactNode;
-}) {
   return (
-    <ListRow
-      title={reservation.name}
-      subtitle={`${formatDate(reservation.date)} · ${formatTime(reservation.time)} · Party of ${reservation.partySize}${reservation.walkIn ? " · Walk-in" : ""}`}
-      trailing={
-        <div className="flex items-center gap-2">
-          <StatusBadge status={reservation.status} />
-          {actions}
+    <Card className="p-5 bg-stone-900 text-stone-100 rounded-2xl border border-stone-800 shadow-xl">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5 border-b border-stone-800 pb-3">
+        <div>
+          <h3 className="text-lg font-serif font-bold text-stone-100 flex items-center gap-2">
+            <MapPinIcon className="text-amber-500" />
+            Host Interactive Floor Plan
+          </h3>
+          <p className="text-xs text-stone-400">
+            Click a table to highlight guest timeline record or inspect details
+          </p>
         </div>
-      }
-    />
-  );
-}
+        <div className="flex items-center gap-3 text-xs">
+          <span className="flex items-center gap-1.5 text-stone-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-emerald-500/50 shadow-sm" />
+            Available
+          </span>
+          <span className="flex items-center gap-1.5 text-stone-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-amber-500/50 shadow-sm ring-2 ring-amber-500/30 animate-pulse" />
+            Reserved (Amber glow)
+          </span>
+          <span className="flex items-center gap-1.5 text-stone-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-emerald-400/50 shadow-sm ring-2 ring-emerald-400/30" />
+            Seated (Emerald glow)
+          </span>
+        </div>
+      </div>
 
-export function BookingConfirmation({ reservation, onNew }: { reservation: Reservation; onNew?: () => void }) {
-  return (
-    <Card className="flex flex-col gap-4 p-5">
-      <div className="flex items-center gap-2">
-        <Badge tone="pass">Booked</Badge>
-        <span className="text-sm text-[#7c8595]">Reservation confirmed</span>
-      </div>
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-[11px] uppercase tracking-wider text-[#7c8595]">Booking reference</p>
-          <p className="font-mono text-2xl text-[#4f8cff]">{reservation.id}</p>
+      {zones.length === 0 ? (
+        <EmptyState
+          title="No Tables Configured"
+          message="There are no dining tables available on the floor plan."
+          description="Visit Cafe Setup to configure tables and seating zones."
+        />
+      ) : (
+        <div className="space-y-6">
+          {zones.map((zone) => {
+            const zoneTables = tables.filter((t) => t.zone === zone);
+            return (
+              <div key={zone} className="bg-stone-950/50 p-4 rounded-xl border border-stone-800/80">
+                <h4 className="text-xs font-semibold text-amber-400/90 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <SparklesIcon className="w-3.5 h-3.5 text-amber-500" />
+                  {zone}
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                  {zoneTables.map((table) => {
+                    const { status, booking } = getTableStatus(table.id);
+                    const isSelected = selectedTableId === table.id;
+
+                    let statusClasses = "bg-stone-800/80 border-stone-700 text-stone-300 hover:border-stone-500";
+                    if (status === "reserved") {
+                      statusClasses = "bg-amber-950/40 border-amber-500/60 text-amber-200 shadow-lg shadow-amber-950/50 ring-1 ring-amber-500/40";
+                    } else if (status === "seated") {
+                      statusClasses = "bg-emerald-950/40 border-emerald-500/60 text-emerald-200 shadow-lg shadow-emerald-950/50 ring-1 ring-emerald-500/40";
+                    }
+
+                    if (isSelected) {
+                      statusClasses += " ring-2 ring-amber-400 scale-[1.02]";
+                    }
+
+                    return (
+                      <button
+                        key={table.id}
+                        type="button"
+                        onClick={() => onSelectTable && onSelectTable(table)}
+                        className={`p-3.5 rounded-xl border text-left transition-all duration-200 flex flex-col justify-between h-28 relative overflow-hidden group ${statusClasses}`}
+                      >
+                        <div className="flex items-start justify-between w-full">
+                          <span className="font-semibold text-xs tracking-tight text-stone-100 group-hover:text-white truncate">
+                            {table.name}
+                          </span>
+                          <Badge
+                            tone={
+                              status === "seated"
+                                ? "pass"
+                                : status === "reserved"
+                                ? "warn"
+                                : "neutral"
+                            }
+                          >
+                            {status === "seated" ? "Seated" : status === "reserved" ? "Reserved" : "Open"}
+                          </Badge>
+                        </div>
+
+                        <div className="my-1">
+                          {booking ? (
+                            <p className="text-xs font-semibold text-stone-200 truncate">
+                              {booking.guestName}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-stone-400 font-light">
+                              {table.capacity} Guests Max
+                            </p>
+                          )}
+                          {booking && (
+                            <p className="text-[10px] text-stone-400 flex items-center gap-1 mt-0.5">
+                              <ClockIcon className="w-3 h-3 text-amber-400" />
+                              {booking.time}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between text-[10px] text-stone-400 border-t border-stone-800 pt-1.5 mt-auto">
+                          <span>Cap: {table.capacity}</span>
+                          {isSelected && <span className="text-amber-400 font-bold">Focused</span>}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </div>
-        <div className="text-right">
-          <p className="text-[11px] uppercase tracking-wider text-[#7c8595]">Party</p>
-          <p className="font-mono text-2xl text-[#e6e9ef]">{reservation.partySize}</p>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 border-t border-[#262b33] pt-4 text-sm">
-        <div>
-          <p className="text-[11px] uppercase tracking-wider text-[#7c8595]">Date</p>
-          <p className="text-[#e6e9ef]">{formatDate(reservation.date)}</p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-wider text-[#7c8595]">Time</p>
-          <p className="text-[#e6e9ef]">{formatTime(reservation.time)}</p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-wider text-[#7c8595]">Name</p>
-          <p className="truncate text-[#e6e9ef]" title={reservation.name}>{reservation.name}</p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-wider text-[#7c8595]">Phone</p>
-          <p className="truncate font-mono text-[#e6e9ef]" title={reservation.phone}>{reservation.phone}</p>
-        </div>
-      </div>
-      {onNew ? (
-        <Button variant="secondary" size="sm" onClick={onNew}>
-          Make another booking
-        </Button>
-      ) : null}
+      )}
     </Card>
   );
 }
 
-export function WalkInModal({
-  open,
-  onClose,
-  onSubmit,
-  defaultTime,
+export function BookingReceiptCard({
+  booking,
+  cafeName,
+  onDone,
 }: {
-  open: boolean;
-  onClose: () => void;
-  onSubmit: (name: string, partySize: number) => void;
-  defaultTime: string;
+  booking: Booking;
+  cafeName: string;
+  onDone?: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [partySize, setPartySize] = useState(2);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open) {
-      setName("");
-      setPartySize(2);
-      setError(null);
-    }
-  }, [open]);
-
-  if (!open) return null;
-
-  const handleSubmit = () => {
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError("Guest name is required.");
-      return;
-    }
-    onSubmit(trimmed, partySize);
-  };
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
-      <Card className="flex w-full max-w-sm flex-col gap-4 p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-[#e6e9ef]">Add Walk-in</h2>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Close
-          </Button>
+    <Card className="max-w-lg mx-auto bg-white border border-stone-200 shadow-2xl rounded-2xl overflow-hidden animate-fadeIn">
+      {/* Receipt Top Header */}
+      <div className="bg-stone-900 text-stone-100 p-6 text-center relative">
+        <div className="w-12 h-12 bg-amber-600/20 text-amber-400 rounded-full flex items-center justify-center mx-auto mb-2 border border-amber-500/30">
+          <CheckCircleIcon className="w-7 h-7 text-amber-400" />
         </div>
-        <p className="text-sm text-[#7c8595]">Seated at {formatTime(defaultTime)}.</p>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] uppercase tracking-wider text-[#7c8595]" htmlFor="walkin-name">Guest name</label>
-          <input
-            id="walkin-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Jordan Lee"
-            className="w-full rounded-md border border-[#262b33] bg-[#0f1216] px-3 py-2 text-sm text-[#e6e9ef] outline-none focus:border-[#4f8cff]"
-          />
+        <p className="text-xs font-semibold text-amber-400 tracking-wider uppercase">Reservation Confirmed</p>
+        <h2 className="text-2xl font-serif font-bold text-white mt-1">{cafeName}</h2>
+        <div className="mt-3 inline-block px-4 py-1.5 bg-stone-800 rounded-full border border-stone-700 text-xs font-mono text-amber-300 font-bold tracking-widest">
+          {booking.confirmationCode}
         </div>
-        <div className="flex flex-col gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-[#7c8595]">Party size</span>
-          <PartySizePicker value={partySize} onChange={setPartySize} />
+      </div>
+
+      {/* Receipt Body */}
+      <div className="p-6 space-y-4 bg-stone-50/60">
+        <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm space-y-3">
+          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
+            <span className="text-stone-500 font-medium">Guest Name</span>
+            <span className="font-semibold text-stone-900">{booking.guestName}</span>
+          </div>
+          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
+            <span className="text-stone-500 font-medium">Party Size</span>
+            <span className="font-semibold text-stone-900">{booking.partySize} Guests</span>
+          </div>
+          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
+            <span className="text-stone-500 font-medium">Date & Time</span>
+            <span className="font-semibold text-stone-900">{booking.date} at {booking.time}</span>
+          </div>
+          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
+            <span className="text-stone-500 font-medium">Seating Zone</span>
+            <span className="font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs">
+              {booking.zone}
+            </span>
+          </div>
+          <div className="flex items-center justify-between border-b border-stone-100 pb-2 text-sm">
+            <span className="text-stone-500 font-medium">Contact Email</span>
+            <span className="text-stone-800 text-xs font-mono">{booking.email}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-stone-500 font-medium">Contact Phone</span>
+            <span className="text-stone-800 text-xs font-mono">{booking.phone}</span>
+          </div>
         </div>
-        {error ? <p className="text-sm text-[#ff6b6b]">{error}</p> : null}
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" size="sm" onClick={handleSubmit}>
-            Seat guest
-          </Button>
-        </div>
-      </Card>
-    </div>
+
+        {booking.specialRequest && (
+          <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-900">
+            <span className="font-semibold text-amber-800 block mb-0.5">Special Request:</span>
+            "{booking.specialRequest}"
+          </div>
+        )}
+
+        <p className="text-[11px] text-center text-stone-500 font-light italic">
+          Please arrive 5 minutes prior to your reserved time. We hold reservations for up to 15 minutes.
+        </p>
+
+        {onDone && (
+          <div className="pt-2">
+            <Button variant="primary" className="w-full justify-center py-2.5 text-sm" onClick={onDone}>
+              Back to Booking Overview
+            </Button>
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
-export function SettingsForm({
-  settings,
-  onSave,
-  onReset,
+export function TimelineBookingRow({
+  booking,
+  tableName,
+  isHighlighted,
+  onMarkSeated,
 }: {
-  settings: Settings;
-  onSave: (next: Settings) => void;
-  onReset: () => void;
+  booking: Booking;
+  tableName?: string;
+  isHighlighted?: boolean;
+  onMarkSeated?: (bookingId: string) => void;
 }) {
-  const [openTime, setOpenTime] = useState(settings.openTime);
-  const [closeTime, setCloseTime] = useState(settings.closeTime);
-  const [slotMinutes, setSlotMinutes] = useState(settings.slotMinutes);
-  const [maxCovers, setMaxCovers] = useState(settings.maxCovers);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setOpenTime(settings.openTime);
-    setCloseTime(settings.closeTime);
-    setSlotMinutes(settings.slotMinutes);
-    setMaxCovers(settings.maxCovers);
-  }, [settings]);
-
-  const handleSubmit = () => {
-    const open = toMinutes(openTime);
-    const close = toMinutes(closeTime);
-    if (close <= open) {
-      setError("Closing time must be after opening time.");
-      return;
-    }
-    if (slotMinutes < 5 || slotMinutes > 120) {
-      setError("Slot interval must be between 5 and 120 minutes.");
-      return;
-    }
-    if (maxCovers < 1 || maxCovers > 200) {
-      setError("Max covers must be between 1 and 200.");
-      return;
-    }
-    setError(null);
-    onSave({ openTime, closeTime, slotMinutes, maxCovers });
-  };
+  const statusTone =
+    booking.status === "seated"
+      ? "pass"
+      : booking.status === "confirmed"
+      ? "warn"
+      : "neutral";
 
   return (
-    <Card className="flex flex-col gap-4 p-5">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] uppercase tracking-wider text-[#7c8595]" htmlFor="set-open">Opens</label>
-          <input
-            id="set-open"
-            type="time"
-            value={openTime}
-            onChange={(e) => setOpenTime(e.target.value)}
-            className="w-full rounded-md border border-[#262b33] bg-[#0f1216] px-3 py-2 font-mono text-sm text-[#e6e9ef] outline-none focus:border-[#4f8cff]"
-          />
+    <div
+      className={`p-4 rounded-xl border transition-all duration-200 ${isHighlighted ? 'bg-amber-50/90 border-amber-400 ring-2 ring-amber-300 shadow-md' : 'bg-white border-stone-200 hover:border-stone-300 shadow-sm'}`}
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="p-2.5 bg-stone-100 rounded-lg text-stone-700 border border-stone-200 font-mono text-xs font-bold text-center min-w-[65px]">
+            <ClockIcon className="w-3.5 h-3.5 text-amber-600 mx-auto mb-0.5" />
+            {booking.time}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="font-serif font-bold text-stone-900 text-base">{booking.guestName}</h4>
+              <Badge tone={statusTone}>
+                {booking.status === "seated" ? "Seated (Emerald)" : booking.status === "confirmed" ? "Reserved (Amber)" : booking.status}
+              </Badge>
+            </div>
+            <p className="text-xs text-stone-500 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span>Party of {booking.partySize}</span>
+              <span>•</span>
+              <span className="font-medium text-stone-700">{tableName || booking.zone}</span>
+              <span>•</span>
+              <span className="font-mono text-stone-400">{booking.confirmationCode}</span>
+            </p>
+            {booking.specialRequest && (
+              <p className="text-xs text-amber-800 bg-amber-50/80 px-2 py-1 rounded border border-amber-200 mt-2 font-light">
+                <span className="font-semibold">Request:</span> {booking.specialRequest}
+              </p>
+            )}
+          </div>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] uppercase tracking-wider text-[#7c8595]" htmlFor="set-close">Closes</label>
-          <input
-            id="set-close"
-            type="time"
-            value={closeTime}
-            onChange={(e) => setCloseTime(e.target.value)}
-            className="w-full rounded-md border border-[#262b33] bg-[#0f1216] px-3 py-2 font-mono text-sm text-[#e6e9ef] outline-none focus:border-[#4f8cff]"
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] uppercase tracking-wider text-[#7c8595]" htmlFor="set-slot">Slot interval (min)</label>
-          <input
-            id="set-slot"
-            type="number"
-            min={5}
-            max={120}
-            step={5}
-            value={slotMinutes}
-            onChange={(e) => setSlotMinutes(Number(e.target.value))}
-            className="w-full rounded-md border border-[#262b33] bg-[#0f1216] px-3 py-2 font-mono text-sm text-[#e6e9ef] outline-none focus:border-[#4f8cff]"
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[11px] uppercase tracking-wider text-[#7c8595]" htmlFor="set-covers">Max covers / slot</label>
-          <input
-            id="set-covers"
-            type="number"
-            min={1}
-            max={200}
-            value={maxCovers}
-            onChange={(e) => setMaxCovers(Number(e.target.value))}
-            className="w-full rounded-md border border-[#262b33] bg-[#0f1216] px-3 py-2 font-mono text-sm text-[#e6e9ef] outline-none focus:border-[#4f8cff]"
-          />
+
+        <div className="flex items-center gap-2 self-end sm:self-center">
+          {booking.status === "confirmed" && onMarkSeated && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => onMarkSeated(booking.id)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm font-semibold text-xs py-1.5"
+            >
+              Mark as Seated
+            </Button>
+          )}
+          {booking.status === "seated" && (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
+              ✓ Guest Seated
+            </span>
+          )}
         </div>
       </div>
-      {error ? <p className="text-sm text-[#ff6b6b]">{error}</p> : null}
-      <div className="flex justify-between gap-2">
-        <Button variant="ghost" size="sm" onClick={onReset}>
-          Reset to defaults
-        </Button>
-        <Button variant="primary" size="sm" onClick={handleSubmit}>
-          Save settings
-        </Button>
-      </div>
-    </Card>
+    </div>
   );
 }
