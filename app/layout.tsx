@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CornerTable",
-  description: "A lightweight, low-chaos table booking and reservation management system tailored specifically for neighborhood cafes.",
+  title: "Juniper Table",
+  description: "A focused, direct-booking site for neighborhood cafes: it gives guests an easy way to reserve and staff a simple way to manage tables, without the breadth of a full restaurant operations platform.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
