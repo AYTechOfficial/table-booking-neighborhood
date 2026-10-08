@@ -94,11 +94,9 @@ function zoneOptionsFor(data: CafeData, partySize: number, date: string, time: s
 
 function nextConfirmationCode(bookings: Booking[]): string {
   const used = new Set(bookings.map((b) => b.confirmationCode));
-  let code = "";
-  do {
-    code = `NT-${1000 + Math.floor(Math.random() * 9000)}`;
-  } while (used.has(code));
-  return code;
+  let n = 8821;
+  while (used.has(`NT-${n}`)) n += 1;
+  return `NT-${n}`;
 }
 
 export default function Page() {
